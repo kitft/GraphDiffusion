@@ -1236,9 +1236,9 @@ def mask_impossible_moves(states_in,env,return_states_out=False):
 
     if return_states_out, it returns states_out, which is the result of applying all moves to all states
     """
-    states_out = apply_all_moves_to_all_states_torch(states_in.reshape(-1,env.state_dim)).reshape(states_in.shape[0],env.num_moves,env.state_dim)
+    states_out = apply_all_moves_to_all_states_torch_jit(states_in.reshape(-1,env.state_dim)).reshape(states_in.shape[0],env.num_moves,env.state_dim)
     if return_states_out:
-        return ~(states_out == states_in.unsqueeze(1).repeat(1,env.num_moves,1)).all(dim=-1),states_out
+        return ~(states_out == states_in.unsqueeze(1).repeat(1,env.num_moves,1)).all(dim=-1), states_out
     else:
         return ~(states_out == states_in.unsqueeze(1).repeat(1,env.num_moves,1)).all(dim=-1)
 
@@ -1348,14 +1348,46 @@ from torch.utils.data import IterableDataset
 from torch.utils.data import DataLoader
 import math
 
-def fwd_diffusion_function_from_model(model,env):
+def fwd_diffusion_probs_func_from_model(fwd_model,env,return_states_out=False,device=None):
+    # if device is None:
+    #     if hasattr(fwd_model, 'device'):
+    #         device = fwd_model.device
+    #     else:
+    #         device = 'cpu'
     def func_for_fwd(states):
-        learned_policy = model(states)
-        good_moves_mask = mask_impossible_moves(states,env)
-        learned_policy = learned_policy*good_moves_mask
-        learned_policy = learned_policy/learned_policy.sum(dim=-1,keepdims=True)
-        return learned_policy
+        learned_policy = fwd_model(states)
+        if return_states_out:
+            good_moves_mask,states_out = mask_impossible_moves(states,env,return_states_out=return_states_out)
+            learned_policy = learned_policy*good_moves_mask
+            learned_policy = learned_policy/learned_policy.sum(dim=-1,keepdims=True)
+            return learned_policy,states_out
+        else:
+            good_moves_mask = mask_impossible_moves(states,env,return_states_out=return_states_out)
+            learned_policy = learned_policy*good_moves_mask
+            learned_policy = learned_policy/learned_policy.sum(dim=-1,keepdims=True)
+            return learned_policy
     return func_for_fwd
+
+def reverse_diffusion_probs_from_fwd_model_and_scores(fwd_model,env,return_states_out=False,device=None):
+    if device is None:
+        if hasattr(fwd_model, 'parameters'):
+            device = next(fwd_model.parameters()).device
+        else:
+            device = 'cpu'
+    moves = torch.arange(env.num_moves,device=device)
+    inverse_moves = torch.tensor(env.inverse_moves,device=device)
+    def func_for_reverse(states,scores, return_states_out=return_states_out):
+        scores = scores.to(device)
+        states = states.to(device)
+        good_moves_mask,states_out = mask_impossible_moves(states,env,return_states_out=True)
+        weights_from_gx_to_x = fwd_model(states_out.reshape(-1,env.state_dim)).reshape(-1,env.num_moves,env.num_moves)[:,moves,inverse_moves]
+        learned_fwd_policy = weights_from_gx_to_x*good_moves_mask*scores
+        learned_fwd_policy = learned_fwd_policy/learned_fwd_policy.sum(dim=-1,keepdims=True)
+        if return_states_out:
+            return learned_fwd_policy,states_out
+        else:
+            return learned_fwd_policy
+    return func_for_reverse
 
 #def scrambler_torch_batch(env, scramble_length, batch_size=1, device='cpu', return_apply_all=False, weight_contraction=3, total_relator_weight=0.16, start_state=None, block_inverse_moves=False, double_weight=None):
 def scrambler_torch_batch(env, scramble_length, batch_size=1, device='cpu', return_apply_all=False,start_state=None, model=None):
@@ -1375,7 +1407,7 @@ def scrambler_torch_batch(env, scramble_length, batch_size=1, device='cpu', retu
     if False:
         fwd_diffusion_function = lambda x: compute_weights_from_state_vec(x, env, weight_contraction, total_relator_weight, double_weight=double_weight)
     else:
-        fwd_diffusion_function = fwd_diffusion_function_from_model(model,env)
+        fwd_diffusion_function = fwd_diffusion_probs_func_from_model(model,env,return_states_out=True)
 
     while True:
         yield generate_trajectory_torch_batch(batch_size,scramble_length, env,device,start_state,return_apply_all,fwd_diffusion_function)
@@ -1410,18 +1442,17 @@ def generate_trajectory_torch_batch(batch_size,scramble_length, env,device,start
     for s in range(scramble_length):
         # Compute weights for all states in batch using vectorized computation
         #weights = compute_weights_from_state_vec(current_states, env, weight_contraction, total_relator_weight, double_weight=double_weight)
-        weights_BM = fwd_diffusion_function(current_states)
+        weights_BM, all_next_states_BMS = fwd_diffusion_function(current_states)
         batch_moves_B = torch.multinomial(weights_BM, num_samples=1).squeeze(-1)
-        
         # Apply moves to all states at once
-        next_states_BS = finger_ix_fast_vec_torch_list_of_moves(current_states, batch_moves_B)
+        #next_states_BS = finger_ix_fast_vec_torch_list_of_moves(current_states, batch_moves_B)
         # Store results
-        current_states = next_states_BS
-        states[:,s+1] = current_states.clone().detach()
-        moves[:,s] = batch_moves_B.clone().detach()
+        current_states = all_next_states_BMS[torch.arange(batch_size),batch_moves_B,:]
+        states[:,s+1] = current_states
+        moves[:,s] = batch_moves_B
     
     if return_apply_all:
-        all_next_states = apply_all_moves_to_all_states_torch(states.reshape(batch_size*(scramble_length+1), env.state.size)).reshape(batch_size, (scramble_length+1), env.num_moves, env.state.size)
+        all_next_states = all_next_states_BMS
     else:
         all_next_states = None
     return states, moves, all_next_states
@@ -1530,3 +1561,5 @@ class ScrambleGeneratorTORCH(IterableDataset):
             #yield X, y
             states, moves, all_next_states = next(self.generator)
             yield states, moves, all_next_states
+
+apply_all_moves_to_all_states_torch_jit = torch.jit.script(apply_all_moves_to_all_states_torch)

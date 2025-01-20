@@ -10,6 +10,13 @@ import numpy as np
 
 import zlib
 from typing import Union, List
+from NN_models import *
+from torch_AC import *
+from AC_heuristic_search import *
+import wandb
+import time
+import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 
 
@@ -65,22 +72,16 @@ from typing import Union, List
 #         )
 
 class PPO_policy_net(nn.Module):
-    def __init__(self, state_size, n_actions=12, hidden_dim=128):
+    def __init__(self, state_dim, num_moves=12, hidden_dim=128, depth= 5):
         super(PPO_policy_net, self).__init__()
         self.num_classes = 5  # For one-hot encoding
-        self.input_dim = state_size*self.num_classes
+        self.input_dim = state_dim*self.num_classes
         self.dropout_rate = 0.0
         self.policy = nn.Sequential(
             LinearBlock(self.input_dim, hidden_dim, self.dropout_rate),
             LinearBlock(hidden_dim, hidden_dim, self.dropout_rate),
-            ResidualBlock_no_time(hidden_dim, self.dropout_rate),
-            ResidualBlock_no_time(hidden_dim, self.dropout_rate),
-            ResidualBlock_no_time(hidden_dim, self.dropout_rate),
-            ResidualBlock_no_time(hidden_dim, self.dropout_rate),
-            #extra
-            ResidualBlock_no_time(hidden_dim, self.dropout_rate),
-            ResidualBlock_no_time(hidden_dim, self.dropout_rate),
-            LinearBlock(hidden_dim, n_actions,0),
+            *[ResidualBlock_no_time(hidden_dim, self.dropout_rate) for _ in range(depth)],
+            LinearBlock(hidden_dim, num_moves,0),
             nn.Softmax(dim=-1)
         )
 
@@ -91,21 +92,15 @@ class PPO_policy_net(nn.Module):
 
 
 class PPO_value_net(nn.Module):
-    def __init__(self, state_size, hidden_dim=128):
+    def __init__(self, state_dim, hidden_dim=128, depth= 5):
         super(PPO_value_net, self).__init__()
         self.num_classes = 5  # For one-hot encoding
-        self.input_dim = state_size*self.num_classes
+        self.input_dim = state_dim*self.num_classes
         self.dropout_rate = 0.0 
         self.value = nn.Sequential(
             LinearBlock(self.input_dim, hidden_dim, self.dropout_rate),
             LinearBlock(hidden_dim, hidden_dim, self.dropout_rate),
-            ResidualBlock_no_time(hidden_dim, self.dropout_rate),
-            ResidualBlock_no_time(hidden_dim, self.dropout_rate),
-            ResidualBlock_no_time(hidden_dim, self.dropout_rate),
-            ResidualBlock_no_time(hidden_dim, self.dropout_rate),
-            #extra
-            ResidualBlock_no_time(hidden_dim, self.dropout_rate),
-            ResidualBlock_no_time(hidden_dim, self.dropout_rate),
+            *[ResidualBlock_no_time(hidden_dim, self.dropout_rate) for _ in range(depth)],
             LinearBlock(hidden_dim, 1,0),
         )
 
@@ -148,23 +143,31 @@ def batch_count_unique_if_indices(tensor):
     
 
 class PPOAgent:
-    def __init__(self, state_size, n_actions=12, lr=0.001, gamma=0.99,
-                 epsilon=0.2, entropy_coef=1, value_coef=0.5, hidden_dim=128, use_experience_buffer=True):
-        self.n_actions = n_actions
+    def __init__(self, env, lr=0.001, gamma=0.99,
+                 epsilon=0.2, entropy_coef=1, value_coef=0.5, hidden_dim=128, depth= 5,use_experience_buffer=True):
+        self.env = env
+        self.state_dim = env.state_dim
+        self.num_moves = env.num_moves
+
         self.gamma = gamma
         self.epsilon = epsilon
         self.entropy_coef = entropy_coef
         self.value_coef = value_coef
 
         # Policy network
-        self.policy = PPO_policy_net(state_size=state_size, n_actions=n_actions, hidden_dim=hidden_dim)
+        self.policy = PPO_policy_net(self.state_dim, self.num_moves, hidden_dim, depth)
 
         # Value network
-        self.value = PPO_value_net(state_size=state_size, hidden_dim=hidden_dim)
+        self.value = PPO_value_net(self.state_dim, hidden_dim,depth)
 
         self.optimizer = torch.optim.Adam(list(self.policy.parameters()) +
                                           list(self.value.parameters()), lr=lr)
         self.reference_kolmogorov_complexity = approximate_kolmogorov_complexity_array(np.random.randint(-2,2,size=(len(env.goal))))
+
+        self.min_proportion_of_0_4 = 0.1/4
+        self.min_proportion_of_4_11 = 0.9/8
+        self.at_least_hard_cutoff_0_4 = 0.01
+        self.at_least_hard_cutoff_4_11 = 0.02
 
         #self.buffer = ExperienceBuffer()
 
@@ -175,7 +178,7 @@ class PPOAgent:
         """
         with torch.no_grad():
             action_probs = self.policy(states)
-            mask_out_bad_moves,states_out = mask_impossible_moves(states,env,return_states_out=True)
+            mask_out_bad_moves,states_out = mask_impossible_moves(states,self.env,return_states_out=True)
 
 
             #states_out = apply_all_moves_to_all_states_torch(states.reshape(-1,env.state_dim)).reshape(states.shape[0],env.num_moves,env.state_dim)
@@ -271,9 +274,11 @@ class PPOAgent:
         for key in rewards_info:
             reward_components[key] = rewards_info[key].reshape(scramble_length,batch_size)
 
-        # Calculate diversity bonuses
-        hash_states = hash_vectors_torch(all_states.reshape(-1, all_states.size(-1)))
+        # Calculate diversity bonuses using hashing - this is sufficient (hash collisions are rare)
+        hash_states = hash_vectors_torch(all_states.reshape(-1, all_states.size(-1)),force_no_collision=False,monitor_collision=False)
+        
         _,reverse_indices = torch.unique(hash_states,return_inverse=True)
+        # Get number of unique states with hashing
         reverse_indices_reshaped= reverse_indices.reshape(scramble_length,batch_size).transpose(0,1)
 
         #unique_states_in_entire_sample= uniques.shape[0]
@@ -293,16 +298,13 @@ class PPOAgent:
         kolmogorov_complexity = torch.zeros_like(all_rewards)
 
         #negative reward if 0-4 are not at least 10%
-        min_proportion_of_0_4 = 0.1/4
-        min_proportion_of_4_11 = 0.9/8
-        at_least_hard_cutoff_0_4 = 0.01
-        at_least_hard_cutoff_4_11 = 0.02
+       
 
         #action_penalty_if_not_0_4 = -(1/min_proportion_of_0_4)*torch.relu(min_proportion_of_0_4 - all_action_probs[:,:,:4].sum(dim=-1))
-        action_penalty_if_not_0_4 = -(1/4)*(1/min_proportion_of_0_4)*torch.abs((min_proportion_of_0_4 - all_action_probs[:,:,:4])).sum(dim=-1)
-        action_penalty_if_not_4_11 = -(1/8)*(1/min_proportion_of_4_11)*torch.abs((min_proportion_of_4_11 - all_action_probs[:,:,4:])).sum(dim=-1)
-        penalty_if_0_4_not_at_least_x_each = -(1/4)*(1/at_least_hard_cutoff_0_4)*torch.relu((at_least_hard_cutoff_0_4 - all_action_probs[:,:,:4])).sum(dim=-1)#penalise if 0-4 probs each <0.01
-        penalty_if_4_11_not_at_least_y_each = -(1/8)*(1/at_least_hard_cutoff_4_11)*torch.relu((at_least_hard_cutoff_4_11 - all_action_probs[:,:,4:])).sum(dim=-1)#penalise if 4-11 probs each <0.02
+        action_penalty_if_not_0_4 = -(1/4)*(1/self.min_proportion_of_0_4)*torch.abs((self.min_proportion_of_0_4 - all_action_probs[:,:,:4])).sum(dim=-1)
+        action_penalty_if_not_4_11 = -(1/8)*(1/self.min_proportion_of_4_11)*torch.abs((self.min_proportion_of_4_11 - all_action_probs[:,:,4:])).sum(dim=-1)
+        penalty_if_0_4_not_at_least_x_each = -(1/4)*(1/self.at_least_hard_cutoff_0_4)*torch.relu((self.at_least_hard_cutoff_0_4 - all_action_probs[:,:,:4])).sum(dim=-1)#penalise if 0-4 probs each <0.01
+        penalty_if_4_11_not_at_least_y_each = -(1/8)*(1/self.at_least_hard_cutoff_4_11)*torch.relu((self.at_least_hard_cutoff_4_11 - all_action_probs[:,:,4:])).sum(dim=-1)#penalise if 4-11 probs each <0.02
 
 
         #total_nonzero_counts_close_to_correct_mean = (rewards_info['total_nonzero_counts'].reshape(scramble_length,batch_size).mean(dim=0,keepdim=True)/(2*env.max_relator_length))#0 if good, 0.5 if full, 0 if short
@@ -343,7 +345,7 @@ class PPOAgent:
         returns_flat = returns.reshape(-1) 
         advantages_flat = advantages.reshape(-1)
         old_log_probs_flat = old_log_probs.reshape(-1)
-        good_moves_mask_flat = good_moves_mask.reshape(-1,env.num_moves)
+        good_moves_mask_flat = good_moves_mask.reshape(-1,self.env.num_moves)
 
         # Calculate total number of samples and subset size
         total_samples = states_flat.shape[0]
@@ -413,7 +415,6 @@ class PPOAgent:
         Trains the agent by collecting vectorized experience each iteration.
         """
         # Initialize wandb
-        import wandb
         training_start_time = str(int(time.time()))
         wandb.init(project="andrews-curtis",
                   name=f"mrl_{env.max_relator_length}_sl{scramble_length}_bs{batch_size}_ts{training_start_time}",  # Add descriptive run name
@@ -443,8 +444,6 @@ class PPOAgent:
         self.value.to(self.device)
         
         # For plotting
-        import matplotlib.pyplot as plt
-        from tqdm import tqdm
         returns_history = []
         plt.ion() # Enable interactive mode
         fig, ax = plt.subplots()

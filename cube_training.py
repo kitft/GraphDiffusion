@@ -120,7 +120,7 @@ def custom_loss_discrete(f_theta: torch.nn.Module, x: torch.Tensor, t: torch.Ten
 
 
 
-def train(model, dataloader, val_dataloader, max_plot_val=30, warmup_frac=0.1, resume_id=None, init_step=0, plot_fn=None):
+def train(model, dataloader, val_dataloader, max_plot_val=30, warmup_frac=0.1, resume_id=None, init_step=0, plot_fn=None,TrainConfig=None):
     """
     Train a model using the provided dataloaders.
 

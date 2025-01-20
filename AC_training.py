@@ -9,10 +9,9 @@ import torch
 import wandb
 from torch_AC import *
 
-apply_all_moves_to_all_states_torch_jit = torch.jit.script(apply_all_moves_to_all_states_torch)
 from typing import Callable
 # Define a custom loss function for our model f_theta(x,g,t)
-def custom_loss_discrete(f_theta_forward: Callable[[torch.Tensor, torch.Tensor], torch.Tensor], x: torch.Tensor, t: torch.Tensor, all_next_moves: torch.Tensor or None, goal_state: torch.Tensor) -> torch.Tensor:
+def custom_loss_discrete(f_theta_forward: Callable[[torch.Tensor, torch.Tensor], torch.Tensor], x: torch.Tensor, t: torch.Tensor, all_next_moves: torch.Tensor or None) -> torch.Tensor:
     device = torch.device('cuda')# if torch.cuda.is_available() else 'cpu')
     # Ensure inputs are on the correct device
     x = x.to(device)
@@ -102,7 +101,7 @@ def custom_loss_discrete(f_theta_forward: Callable[[torch.Tensor, torch.Tensor],
 from pytorch_optimizer import SOAP
 
 
-def train(model, dataloader, val_dataloader,max_plot_val=30,warmup_frac=0.1):
+def train(model, dataloader, val_dataloader,max_plot_val=30,warmup_frac=0.1,TrainConfig=None):
 
     name_time = str(int(time.time()))
     name_for_saving_losses = TrainConfig.name+"training_losses"+name_time+ "_"+model.model_type
@@ -114,7 +113,8 @@ def train(model, dataloader, val_dataloader,max_plot_val=30,warmup_frac=0.1):
     params_str = f"{params_millions}M"
     name_for_saving_model += f"_{params_str}"
 
-    return_apply_all = dataloader.return_apply_all
+    return_apply_all = dataloader.dataset.return_apply_all#this is the generator
+    env = dataloader.dataset.env
     device = torch.device('cuda') if torch.cuda.is_available() else 'cpu'
 
     wandb.init(
@@ -143,7 +143,7 @@ def train(model, dataloader, val_dataloader,max_plot_val=30,warmup_frac=0.1):
     )
     
     #writer = SummaryWriter(os.path.join(TrainConfig.SAVE_DIRECTORY, 'runs', TrainConfig.name + '_' + name_time))
-
+    GOAL_STATE = torch.tensor(env.goal,device=device)
     model.train()
     base_learning_rate = TrainConfig.learning_rate
     max_grad_norm = TrainConfig.max_grad_norm#1.0  # You can adjust this value as needed
@@ -198,7 +198,7 @@ def train(model, dataloader, val_dataloader,max_plot_val=30,warmup_frac=0.1):
                     val_batch_t = torch.linspace(0+1/depth_trajectory,1, steps=depth_trajectory).to(device)
                     val_batch_t = val_batch_t.unsqueeze(0).repeat(val_batch_x.shape[0], 1)
 
-                    val_loss = custom_loss_discrete(model, val_batch_x, val_batch_t,val_all_next_moves,GOAL_STATE)
+                    val_loss = custom_loss_discrete(model, val_batch_x, val_batch_t,val_all_next_moves)
 
                     val_losses.append(val_loss.item())
                     #writer.add_scalar('Loss/val', val_losses[-1], i)
@@ -209,7 +209,7 @@ def train(model, dataloader, val_dataloader,max_plot_val=30,warmup_frac=0.1):
             with ctx:
                 # Calculate the custom loss
                 #custom_loss_value = custom_loss_concrete_matching(model, batch_x, batch_t)
-                actual_loss = custom_loss_discrete(model, batch_x, batch_t,all_next_moves,GOAL_STATE)
+                actual_loss = custom_loss_discrete(model, batch_x, batch_t,all_next_moves)
                 loss = actual_loss /TrainConfig.gradient_accumulation_steps
             
             if torch.isnan(loss):
@@ -249,7 +249,7 @@ def train(model, dataloader, val_dataloader,max_plot_val=30,warmup_frac=0.1):
                 }
 
                 clear_output(wait=True)
-                plot_loss_curves(losses_dict,maxval=max_plot_val)
+                plot_loss_curves(losses_dict,maxval=max_plot_val,TrainConfig=TrainConfig)
                 pbar.refresh()  # Redraw the progress bar
 
                 np.savez(os.path.join(TrainConfig.SAVE_DIRECTORY, name_for_saving_losses), **losses_dict)
@@ -296,7 +296,7 @@ def train(model, dataloader, val_dataloader,max_plot_val=30,warmup_frac=0.1):
     return model, losses_dict
 
 
-def plot_loss_curves(losses_dict,minval=None,maxval=None):
+def plot_loss_curves(losses_dict,minval=None,maxval=None,TrainConfig=None):
     train_losses = losses_dict['train_losses']
     train_losses_aux = losses_dict['train_losses_aux']
     val_losses = losses_dict['val_losses']
@@ -344,3 +344,64 @@ def plot_loss_curves(losses_dict,minval=None,maxval=None):
     
     plt.tight_layout()
     plt.show()
+
+
+def calculate_validation_loss(dataloader_val, model, num_batches=10):
+    """
+    Calculate validation loss over specified number of batches.
+    
+    Args:
+        dataloader_val: Validation dataloader
+        model: Model to evaluate
+        num_batches: Number of batches to use for validation
+    
+    Returns:
+        Average loss over all batches
+    """
+    device = next(model.parameters()).device
+    model = model.to(device)
+    model.eval() # Put in eval mode - for dropout/norm if present
+    
+    total_loss = 0
+    total_trajectories = 0
+    
+    # Process batches in chunks of 10 to avoid memory issues
+    chunk_size = min(10, num_batches)
+    num_chunks = (num_batches + chunk_size - 1) // chunk_size
+    
+    with torch.no_grad():
+        for chunk in range(num_chunks):
+            x_testing = []
+            start_batch = chunk * chunk_size
+            end_batch = min((chunk + 1) * chunk_size, num_batches)
+            all_next_moves_testing = []
+            
+            # Collect batches for this chunk
+            for i, batch in enumerate(dataloader_val):
+                if i >= end_batch:
+                    break
+                if i >= start_batch:
+                    x_testing.append(batch[0])
+                    if batch[2] is not None:
+                        all_next_moves_testing.append(batch[2])
+            if not x_testing:  # Skip if no batches collected
+                continue
+                
+            x_testing = torch.cat(x_testing, dim=0).to(device)
+            all_next_moves_testing = torch.cat(all_next_moves_testing, dim=0).to(device) if len(all_next_moves_testing)>0 else None
+            num_steps = x_testing.shape[1]-1# remove initial state
+            batch_t = torch.linspace(1/num_steps, 1, steps=num_steps, device=device)
+            batch_t = batch_t.unsqueeze(0).repeat(x_testing.shape[0], 1)
+            
+            loss = custom_loss_discrete(model, x_testing, batch_t,all_next_moves=all_next_moves_testing)
+            total_loss += loss.item() * x_testing.shape[0]
+            total_trajectories += x_testing.shape[0]
+            
+            # Free memory
+            del x_testing, batch_t
+            torch.cuda.empty_cache()
+    
+    avg_loss = total_loss / total_trajectories
+    print(f"Validation loss: {avg_loss:.4f} (calculated over {total_trajectories} trajectories)")
+    return avg_loss
+
