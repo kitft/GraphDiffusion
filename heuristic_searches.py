@@ -46,7 +46,7 @@ def calculate_validation_loss(dataloader_val, model, num_batches=10):
                 continue
                 
             x_testing = torch.cat(x_testing, dim=0).to(device)
-            num_steps = TrainConfig.max_depth
+            num_steps = x_testing.shape[1]#TrainConfig.max_depth
             batch_t = torch.linspace(1/num_steps, 1, steps=num_steps, device=device)
             batch_t = batch_t.unsqueeze(0).repeat(x_testing.shape[0], 1)
             
@@ -153,7 +153,7 @@ def hash_vectors_torch(vectors: torch.Tensor, mod: int = 2**61-1) -> torch.Tenso
 
 
 
-def is_state_in_short_distance(state):
+def is_state_in_short_distance(state,hashed_states_close_to_finish):
     """
     Check if a given state is in the list of states 4 moves away from solved.
     
@@ -167,7 +167,7 @@ def is_state_in_short_distance(state):
     return hashed_input_state in hashed_states_close_to_finish
 
 # Vectorize is_state_in_short_distance check across states
-def is_state_in_short_distance_torch(states):
+def is_state_in_short_distance_torch(states,hashed_states_close_to_finish_torch):
     """
     Vectorized version of is_state_in_short_distance for batches of states.
     
@@ -191,13 +191,13 @@ def is_state_in_short_distance_torch(states):
     # Convert results to torch tensor
     return results#torch.tensor(results, dtype=torch.bool, device=states.device if isinstance(states, torch.Tensor) else 'cpu')
 
-def is_state_actually_in_list_torch(state):
+def is_state_actually_in_list_torch(state,states_close_to_finish_torch):
     # Check if state exists in the tensor of states close to finish
     if len(state.shape) == 1:
         state = state.unsqueeze(0)  # Add batch dimension if single state
-    return (state == torch_states_close_to_finish.to(device)).all(dim=1).any()
+    return (state == states_close_to_finish_torch.to(device)).all(dim=1).any()
 
-def is_state_actually_in_list(state):
+def is_state_actually_in_list(state,states_close_to_finish):
     # Check if state exists in the list of states close to finish
     if isinstance(state, torch.Tensor):
         state = state.cpu().numpy()
@@ -206,41 +206,58 @@ def is_state_actually_in_list(state):
         state = state[np.newaxis, :]  # Add batch dimension if single state
     return np.any(np.all(state == states_close_to_finish, axis=1))
 
+def check_for_hash_collisions(states,hashed_states):
+    print(f"len(states): {len(states)}, len(set(hashed_states)): {len(set(hashed_states))}")
+    if len(states) > len(set(hashed_states)):
+        print("WARNING: hash collisions detected")
+        return True
+    else:
+        print("No hash collisions detected")
+        return False
+
 
 from torch_scatter import scatter_max
 #!pip install torch-scatter -f https://data.pyg.org/whl/torch-{torch.__version__}.html
-def beam_search_fast_AC(env, model, beam_width=100, max_depth=TrainConfig.max_depth, check_short_distance=False, skip_redundant_moves=True,attempts=1,start_step=0,many_initial_states=None,expensive_pick_best=True):
+def beam_search_fast_AC(env, model, beam_width=100, max_depth=None, check_short_distance=False, skip_redundant_moves=True,attempts=1,start_step=0,many_initial_states=None,expensive_pick_best=True,close_states=None,hashed_states=None,max_forward_pass=None):
     """
     Beam search to solve the cube using model predictions.
     
     Args:
         env: Cube environment
         model: Trained model for move prediction
-        beam_width: Number of candidates to keep at each depth
-        max_depth: Maximum search depth
-        check_short_distance: Whether to check if solution is found at each step
-        skip_redundant_moves: Whether to skip redundant move sequences
+        beam_width (int): Number of candidates to keep at each depth
+        max_depth (int, optional): Maximum search depth
+        check_short_distance (bool): Whether to check if solution is found at each step
+        skip_redundant_moves (bool): Whether to skip redundant move sequences
+        attempts (int): Number of search attempts to make
+        start_step (int): Starting depth for the search
+        many_initial_states (torch.Tensor, optional): Batch of initial states to search from
+        expensive_pick_best (bool): Whether to use more expensive but potentially better candidate selection
+        close_states (torch.Tensor): Tensor of states considered close to solved state
+        hashed_states (torch.Tensor): Hashed version of close_states
+        max_forward_pass (int, optional): Maximum batch size for model forward passes
     
     Returns:
-        success: Whether solution was found
-        result: Dictionary with solution info
-        path: Solution path if found
+        Tuple containing:
+            success (bool): Whether solution was found
+            result (dict): Dictionary with solution info
+            path (list): Solution path if found
     """
     device = next(model.parameters()).device
     start_time = time.time()
     num_nodes = 0
     current_width = 1
     length_trajectory = max_depth-start_step
+    if close_states is None or hashed_states is None:
+        raise ValueError("close_states and hashed_states must be provided")
 
-    STICKER_SOURCE_IX = torch.tensor(env.STICKER_SOURCE_IX,device=device,dtype=torch.int64)
-    STICKER_TARGET_IX = torch.tensor(env.STICKER_TARGET_IX,device=device,dtype=torch.int64)
+    STICKER_SOURCE_IX = torch.tensor(env.sticker_source_ix,device=device,dtype=torch.int64)
+    STICKER_TARGET_IX = torch.tensor(env.sticker_target_ix,device=device,dtype=torch.int64)
     candidate_states = -1*torch.ones((beam_width,env.state_dim),device=device,dtype=torch.int64)
     if many_initial_states is not None:
-        print("using initial states given")
         num_states = many_initial_states.shape[0]
         candidate_states[0:num_states,:] = torch.tensor(many_initial_states,device=device,dtype=torch.int64)
     else:
-        print("using initial state of env")
         candidate_states[0,:] = torch.tensor(env.state,device=device,dtype=torch.int64)
     candidate_paths = -1*torch.ones((beam_width,length_trajectory),device=device,dtype=torch.int64)
     candidate_log_values = torch.zeros((beam_width),device=device,dtype=torch.float64)
@@ -253,6 +270,18 @@ def beam_search_fast_AC(env, model, beam_width=100, max_depth=TrainConfig.max_de
     #log_values_for_sort_flat= -10000000*torch.ones((beam_width*env.num_moves),device=device,dtype=torch.float64)
     #log_batch_probs = torch.zeros((beam_width*env.num_moves),device=device,dtype=torch.float64)
     # Search up to max depth
+    if max_forward_pass is not None:
+        def model_wrapper(states,t):
+            # Process states in chunks of max_forward_pass size
+            outputs = torch.zeros((states.shape[0],env.num_moves),device=device,dtype=torch.float64)
+            for i in range(0, states.shape[0], max_forward_pass):
+                chunk_states = states[i:i+max_forward_pass]
+                chunk_t = t[i:i+max_forward_pass]
+                chunk_output = model(chunk_states, chunk_t)
+                outputs[i:i+max_forward_pass] = chunk_output
+            return outputs
+    else:
+        model_wrapper = model
     for attempt in range(attempts):
         #if attempt>0:
         #    candidate_paths = torch.cat((candidate_paths,-1*torch.ones((beam_width,max_depth),device=device,dtype=torch.int64)))
@@ -268,7 +297,7 @@ def beam_search_fast_AC(env, model, beam_width=100, max_depth=TrainConfig.max_de
                 #print("c",candidate_states[current_width-1:current_width+1])
                 #print(candidate_states[:current_width].shape)
                 #print(candidate_states.shape)
-                batch_p[:current_width] = model(candidate_states[:current_width],t)
+                batch_p[:current_width] = model_wrapper(candidate_states[:current_width],t)
                 # Take log of probabilities to avoid underflow
                 batch_p[:current_width] = torch.log(batch_p[:current_width] / batch_p[:current_width].sum(axis=-1, keepdims=True))
 
@@ -322,7 +351,7 @@ def beam_search_fast_AC(env, model, beam_width=100, max_depth=TrainConfig.max_de
                 candidate_log_values[:current_width] = log_values_flat[sorted_indices[:current_width]]
       
 
-            check_states = is_state_in_short_distance_torch(candidate_states[:current_width])
+            check_states = is_state_in_short_distance_torch(candidate_states[:current_width],hashed_states)
             if torch.any(check_states):
                 # Get indices of positive check_states
                 positive_indices = torch.where(check_states)[0]
@@ -331,7 +360,7 @@ def beam_search_fast_AC(env, model, beam_width=100, max_depth=TrainConfig.max_de
                 for idx in positive_indices:
                     # Get state and verify with exact check
                     state = candidate_states[idx]
-                    if is_state_actually_in_list_torch(state):
+                    if is_state_actually_in_list_torch(state,close_states):
                         # Found valid solution
                         good_path = candidate_paths[idx]
                         good_path = good_path[:(attempt)*length_trajectory+(depth-start_step)+1]

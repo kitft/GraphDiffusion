@@ -23,6 +23,8 @@ class ExpAct(nn.Module):
         clamp = 5 *torch.tanh(input/5)
         return torch.exp(clamp)#consider reducing to 20
 
+        
+
 
 class LinearBlock(nn.Module):
     """
@@ -45,21 +47,24 @@ class LinearBlock(nn.Module):
         #x = self.dropout(x)
         return x
 
+
+
 class ResidualBlock(nn.Module):
     """
     Residual block with two linear layers and sinusoidal position embedding for time step t.
     """
-    def __init__(self, embed_dim, time_embedding_dim, dropout_rate):
+    def __init__(self, embed_dim, time_embedding_dim, dropout_rate,time_base=1000):
         super(ResidualBlock, self).__init__()
         self.layers = nn.ModuleList([
             LinearBlock(embed_dim, embed_dim, dropout_rate),
             LinearBlock(embed_dim, embed_dim, dropout_rate)
         ])
         self.time_proj = nn.Linear(time_embedding_dim, embed_dim*2)
+        self.time_base = time_base
 
     def forward(self, inputs, t):
         x = inputs
-        t_emb = sinusoidal_position_embedding(t, self.time_proj.in_features)
+        t_emb = sinusoidal_position_embedding(t, self.time_proj.in_features,base=self.time_base)
         t_emb = self.time_proj(t_emb)  # Project to same dimension as x
         t_emb = t_emb.chunk(2, dim=-1)
         scale, shift = t_emb
@@ -70,6 +75,8 @@ class ResidualBlock(nn.Module):
             x = layer(x)  # Now dimensions match for addition
         x += inputs  # skip-connection
         return x
+
+
 
 class ResidualBlock_no_time(nn.Module):
     """
@@ -90,39 +97,43 @@ class ResidualBlock_no_time(nn.Module):
 
 import math
 
-def sinusoidal_position_embedding(t, dim):
+def sinusoidal_position_embedding(t, dim,base=1000):
     """
     Generate sinusoidal temporal embeddings for the given time step t.
     """
     half_dim = dim // 2
-    emb = math.log(1000) / (half_dim - 1)#reduced from 10000 as time steps are small
+    emb = math.log(base) / (half_dim - 1)#reduced from 10000 as time steps are small
     emb = torch.exp(torch.arange(half_dim, device=t.device, dtype=torch.float) * -emb)
     emb = t.unsqueeze(1) * emb.unsqueeze(0)
     emb = torch.cat((emb.sin(), emb.cos()), dim=1)
     return emb
 
-class Model(nn.Module):
+
+
+class Model_AC(nn.Module):
     """
     Architecture suitable for score matching objective.
     """
-    def __init__(self, input_dim=324, output_dim=1, time_embedding_dim=128, width=1000, num_classes=6, dropout_rate=0,n_residual_blocks=4):
-        super(Model, self).__init__()
+    def __init__(self, input_dim=324, output_dim=12, time_embedding_dim=128, width=1000, num_classes=6, dropout_rate=0.0,n_residual_blocks=4,time_base=1000):
+        super(Model_AC, self).__init__()
         self.model_type = "FF_residual_model"
         self.input_dim = input_dim
         self.time_embedding_dim = time_embedding_dim
         self.num_classes = num_classes
         self.n_residual_blocks = n_residual_blocks
+        self.time_base = time_base
 
         # Generator embedding
         # DOESN'T DO ANYTHING!
         #self.generator_embedding = nn.Embedding(len(env.moves), time_embedding_dim)
+        #self.generator_embedding = nn.Embedding(len(output_dim), time_embedding_dim)
 
         # Main network
         self.embedding = LinearBlock(input_dim, 5*width, dropout_rate)  # Removed time_embedding_dim from input
         self.layers = nn.ModuleList([
             LinearBlock(5*width, width, dropout_rate),
             LinearBlock(width, width, dropout_rate),
-            *[ResidualBlock(width, time_embedding_dim, dropout_rate) 
+            *[ResidualBlock(width, time_embedding_dim, dropout_rate,time_base=self.time_base) 
                for _ in range(self.n_residual_blocks)],  # Default n_residual_blocks=4
         ])
         self.output = nn.Sequential(
@@ -133,7 +144,58 @@ class Model(nn.Module):
 
     def forward(self, inputs, t):
         # Convert inputs to one-hot vectors and reshape
-        x = nn.functional.one_hot((inputs+2).long(), num_classes=self.num_classes).to(torch.float)
+        x = nn.functional.one_hot((inputs).long()+2, num_classes=self.num_classes).to(torch.float)
+        x = x.reshape(-1, self.input_dim)
+        #print(self.embedding)
+        # Main network - now time embedding is handled in ResidualBlocks
+        x = self.embedding(x)
+        x = self.layers[0](x)
+        x = self.layers[1](x)
+
+        for layer in self.layers[2:]:
+            x = layer(x, t)
+        
+        # Output score
+        score = self.output(x)
+        
+        return score
+
+
+class Model_Cube(nn.Module):
+    """
+    Architecture suitable for score matching objective.
+    """
+    def __init__(self, input_dim=324, output_dim=12, time_embedding_dim=128, width=1000, num_classes=6, dropout_rate=0.0,n_residual_blocks=4,time_base=100):
+        super(Model_Cube, self).__init__()
+        self.model_type = "FF_residual_model"
+        self.input_dim = input_dim
+        self.time_embedding_dim = time_embedding_dim
+        self.num_classes = num_classes
+        self.n_residual_blocks = n_residual_blocks
+        self.time_base = time_base
+        # Generator embedding
+        # DOESN'T DO ANYTHING!
+        #self.generator_embedding = nn.Embedding(len(env.moves), time_embedding_dim)
+        #self.generator_embedding = nn.Embedding((output_dim), time_embedding_dim)
+
+        # Main network
+        self.embedding = LinearBlock(input_dim, 5*width, dropout_rate)  # Removed time_embedding_dim from input
+        self.layers = nn.ModuleList([
+            LinearBlock(5*width, width, dropout_rate),
+            LinearBlock(width, width, dropout_rate),
+            *[ResidualBlock(width, time_embedding_dim, dropout_rate,time_base=self.time_base) 
+               for _ in range(self.n_residual_blocks)],  # Default n_residual_blocks=4
+        ])
+        self.output = nn.Sequential(
+            nn.Linear(width, output_dim),
+            ExpAct()
+            #nn.Softplus()
+        )  # Output dimension matches input for score matching, with Softplus activation
+
+
+    def forward(self, inputs, t):
+        # Convert inputs to one-hot vectors and reshape
+        x = nn.functional.one_hot((inputs).long(), num_classes=self.num_classes).to(torch.float)
         x = x.reshape(-1, self.input_dim)
         #print(self.embedding)
         # Main network - now time embedding is handled in ResidualBlocks
@@ -226,13 +288,13 @@ class TransformerModel(nn.Module):
         
         return score
 
-class TransformerModel_RC(nn.Module):
+class TransformerModel_Cube(nn.Module):
     """
     Transformer-based architecture for score matching on AC presentations.
     The input is a sequence of integers representing generator indices and their signs.
     """
     def __init__(self, output_dim=12, time_embedding_dim=128, 
-                 d_model=256, nhead=8, num_layers=4, max_seq_len=200, num_classes=5, dropout_rate=TrainConfig.dropout,dim_feedforward_transformer=None,dim_MLP_end = None):
+                 d_model=256, nhead=8, num_layers=4, max_seq_len=200, num_classes=5, dropout_rate=0,dim_feedforward_transformer=None,dim_MLP_end = None):
         super(TransformerModel_RC, self).__init__()
         if dim_feedforward_transformer is None:
             self.dim_feedforward_transformer = 4*d_model

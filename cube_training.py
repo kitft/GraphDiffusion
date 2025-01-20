@@ -28,11 +28,16 @@ Note: Requires TrainConfig to be defined with the following attributes:
     - batch_size_per_depth: int
     - dropout: float
 """
-
-
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')   
+STICKER_SOURCE_IX = torch.tensor(Cube3().sticker_source_ix, device=device,dtype=torch.int64)
+STICKER_TARGET_IX = torch.tensor(Cube3().sticker_target_ix, device=device,dtype=torch.int64)
+# def apply_all_moves_to_all_states_cube(x):
+#     return apply_all_moves_to_all_states(x, STICKER_SOURCE_IX, STICKER_TARGET_IX)
+# apply_all_moves_to_all_states_cube = torch.jit.script(apply_all_moves_to_all_states_cube,example_inputs=(torch.randint(0,6,(1,54),dtype=torch.int64),))
+#torch.jit.trace(apply_all_moves_to_all_states_cube,torch.randint(0,6,(1,54),dtype=torch.int64))
 
 # Define a custom loss function for our model f_theta(x,g,t)
-def custom_loss_discrete(f_theta: torch.nn.Module, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+def custom_loss_discrete(f_theta: torch.nn.Module, x: torch.Tensor, t: torch.Tensor, env=Cube3()) -> torch.Tensor:
     """
     Computes the custom loss for discrete score matching on cube states.
 
@@ -115,7 +120,7 @@ def custom_loss_discrete(f_theta: torch.nn.Module, x: torch.Tensor, t: torch.Ten
 
 
 
-def train(model, dataloader, val_dataloader, max_plot_val=30, warmup_frac=0.1, resume_id=None, init_step=0, plot_fn=plot_loss_curves):
+def train(model, dataloader, val_dataloader, max_plot_val=30, warmup_frac=0.1, resume_id=None, init_step=0, plot_fn=None):
     """
     Train a model using the provided dataloaders.
 
