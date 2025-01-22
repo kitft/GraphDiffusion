@@ -158,7 +158,7 @@ def is_state_actually_in_list(state,states_close_to_finish):
 
 
 from torch_scatter import scatter_max
-def beam_search_fast(env, model, fwd_model, beam_width=100, max_depth=0, check_short_distance=False, skip_redundant_moves=True,attempts=1,start_step=0,many_initial_states=None,expensive_pick_best=True, hashed_states_close_to_finish_torch=None, states_close_to_finish_torch=None):
+def beam_search_fast(env, model, fwd_model, beam_width=100, max_depth=0, check_short_distance=False, skip_redundant_moves=True,attempts=1,start_step=0,many_initial_states=None,expensive_pick_best=True, hashed_states_close_to_finish_torch=None, states_close_to_finish_torch=None,max_forward_pass=None):
     """
     Beam search to solve the cube using model predictions.
     
@@ -202,6 +202,18 @@ def beam_search_fast(env, model, fwd_model, beam_width=100, max_depth=0, check_s
     inverse_indices = torch.zeros((beam_width*env.num_moves),device=device,dtype=torch.int64)
     reverse_diffusion_probs_func = reverse_diffusion_probs_from_fwd_model_and_scores(fwd_model,env,return_states_out=True,device=device)
 
+    if max_forward_pass is not None:
+        def model_wrapper(states,t):
+            # Process states in chunks of max_forward_pass size
+            outputs = torch.zeros((states.shape[0],env.num_moves),device=device,dtype=torch.float64)
+            for i in range(0, states.shape[0], max_forward_pass):
+                chunk_states = states[i:i+max_forward_pass]
+                chunk_t = t[i:i+max_forward_pass]
+                chunk_output = model(chunk_states, chunk_t)
+                outputs[i:i+max_forward_pass] = chunk_output
+            return outputs
+    else:
+        model_wrapper = model
     # Search up to max depth
     for attempt in range(attempts):
         for depth in range(start_step,max_depth):
@@ -210,7 +222,7 @@ def beam_search_fast(env, model, fwd_model, beam_width=100, max_depth=0, check_s
             # Get model predictions
             with torch.no_grad():
                 t = torch.tensor(1 - depth / max_depth, device=device).repeat(current_width)
-                batch_scores = model(candidate_states[:current_width],t)
+                batch_scores = model_wrapper(candidate_states[:current_width],t)
 
             #new_states = apply_all_moves_to_all_states_torch_jit(candidate_states[:current_width])
             #batch_probs = get_probabilities_from_model_output(batch_scores,candidate_states[:current_width],new_states,env,weight_contraction=TrainConfig.weight_contraction,total_relator_weight=TrainConfig.total_relator_weight,double_weight=TrainConfig.double_weight)

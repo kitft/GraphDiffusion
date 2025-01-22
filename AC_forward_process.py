@@ -410,14 +410,18 @@ class PPOAgent:
         return losses, policy_losses, value_losses, entropy_losses
 
     def train(self, env, initial_state, n_episodes=1000,
-              scramble_length=100, batch_size=64, n_epochs_per_batch=10):
+              scramble_length=100, batch_size=64, n_epochs_per_batch=10, TrainConfig=None, resume_id=None, init_step=0):
         """
         Trains the agent by collecting vectorized experience each iteration.
         """
         # Initialize wandb
         training_start_time = str(int(time.time()))
+        run_name = f"mrl_{env.max_relator_length}_sl{scramble_length}_bs{batch_size}_ts{training_start_time}"
+        save_name = os.path.join(TrainConfig.SAVE_DIRECTORY,run_name)
         wandb.init(project="andrews-curtis",
-                  name=f"mrl_{env.max_relator_length}_sl{scramble_length}_bs{batch_size}_ts{training_start_time}",  # Add descriptive run name
+                  name=None if resume_id else run_name,
+                  id=resume_id if resume_id else None,
+                  resume="must" if resume_id else None,
                   config={
                       # Training hyperparameters
                       "n_episodes": n_episodes,
@@ -452,7 +456,7 @@ class PPOAgent:
         ax.set_title('Training Progress')
         
         try:
-            pbar = tqdm(range(n_episodes))
+            pbar = tqdm(range(init_step,n_episodes))
             start_time = time.time()
             for episode in pbar:
                 episode_start = time.time()
@@ -489,15 +493,21 @@ class PPOAgent:
                     wandb.log(log_dict, step=episode * n_epochs_per_batch + i)
                 
                 pbar.set_description(f"Final Loss: {losses[-1]:.4f},avg return: {mean_return:.4f},  Policy Loss: {policy_losses[-1]:.4f}, Value Loss: {value_losses[-1]:.4f}, Entropy: {entropy_losses[-1]:.4f}, collect: {collection_time:.2f}s, update: {update_time:.2f}s")
+                
+                # Save backup every 100 episodes
+                if episode > 0 and episode % 100 == 0:
+                    torch.save(self.policy.state_dict(), f'{save_name}_policy_backup.pt')
+                    torch.save(self.value.state_dict(), f'{save_name}_value_backup.pt')
+                    print(f"\nBackup saved at episode {episode}")
                     
             total_time = time.time() - start_time
             print(f"\nTotal training time: {total_time:.2f}s")
             wandb.log({"total_training_time": total_time})
             
-            # Save models
-            torch.save(self.policy.state_dict(), 'policy.pt')
-            torch.save(self.value.state_dict(), 'value.pt')
-            print("Models saved to policy.pt and value.pt")
+            # Save final models
+            torch.save(self.policy.state_dict(), f'{save_name}_policy.pt')
+            torch.save(self.value.state_dict(), f'{save_name}_value.pt')
+            print(f"Models saved with prefix {save_name}")
                     
         except KeyboardInterrupt or Exception:
             print("\nTraining interrupted by user or exception")
@@ -506,9 +516,9 @@ class PPOAgent:
             wandb.log({"total_training_time": total_time})
             if episode>50:
                 # Save models even if interrupted
-                torch.save(self.policy.state_dict(), 'policy_interrupted.pt')
-                torch.save(self.value.state_dict(), 'value_interrupted.pt')
-            print("Models saved to policy_interrupted.pt and value_interrupted.pt")
+                torch.save(self.policy.state_dict(), f'{save_name}_policy_interrupted.pt')
+                torch.save(self.value.state_dict(), f'{save_name}_value_interrupted.pt')
+                print(f"Models saved with prefix {save_name}_interrupted")
             
         wandb.finish()
 

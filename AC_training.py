@@ -101,7 +101,7 @@ def custom_loss_discrete(f_theta_forward: Callable[[torch.Tensor, torch.Tensor],
 from pytorch_optimizer import SOAP
 
 
-def train(model, dataloader, val_dataloader,max_plot_val=30,warmup_frac=0.1,TrainConfig=None):
+def train(model, dataloader, val_dataloader,max_plot_val=30,warmup_frac=0.1,TrainConfig=None,resume_id=None,init_step=0,plot_fn=plot_loss_curves):
 
     name_time = str(int(time.time()))
     name_for_saving_losses = TrainConfig.name+"training_losses"+name_time+ "_"+model.model_type
@@ -120,7 +120,9 @@ def train(model, dataloader, val_dataloader,max_plot_val=30,warmup_frac=0.1,Trai
     wandb.init(
     # set the wandb project where this run will be logged
     project="DiscreteDiffusion",
-    name=name_for_saving_model +" "+name_time+f"_{params_str}",
+    name= None if resume_id else name_for_saving_model +" "+name_time+f"_{params_str}",
+    id=resume_id if resume_id else None,
+    resume="must" if resume_id else None,
     # track hyperparameters and run metadata
     config={
     "architecture": model.model_type,
@@ -158,13 +160,13 @@ def train(model, dataloader, val_dataloader,max_plot_val=30,warmup_frac=0.1,Trai
     train_losses_aux = []
 
     ctx = torch.amp.autocast(device_type='cuda', dtype=torch.float16) if TrainConfig.ENABLE_FP16 else nullcontext()
-    pbar = trange(TrainConfig.num_steps)
+    pbar = trange(init_step,TrainConfig.num_steps)
     warmup_steps = int(warmup_frac * TrainConfig.num_steps)  # 10% of total steps for warmup
     try:
         for i in pbar:
             # Linear warmup schedule
-            if i <= warmup_steps:
-                learning_rate = base_learning_rate * (i / warmup_steps)
+            if i-init_step <= warmup_steps:
+                learning_rate = base_learning_rate * (i -init_step) / warmup_steps
             else:
                 learning_rate = base_learning_rate
             
@@ -249,7 +251,7 @@ def train(model, dataloader, val_dataloader,max_plot_val=30,warmup_frac=0.1,Trai
                 }
 
                 clear_output(wait=True)
-                plot_loss_curves(losses_dict,maxval=max_plot_val,TrainConfig=TrainConfig)
+                plot_fn(losses_dict,maxval=max_plot_val,TrainConfig=TrainConfig)
                 pbar.refresh()  # Redraw the progress bar
 
                 np.savez(os.path.join(TrainConfig.SAVE_DIRECTORY, name_for_saving_losses), **losses_dict)
