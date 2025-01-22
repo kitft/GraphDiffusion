@@ -47,6 +47,8 @@ Ensure you install the correct version of torch-scatter.
 pip install torch-scatter -f https://data.pyg.org/whl/torch-{torch.__version__}.html
 ```
 
+Ensure you have installed wandb, pytorch_optimizer, and tqdm.
+
 # Credit
 Rubik's cube environment, and statistical comparison data taken from EfficientCube by K. Takano.
 

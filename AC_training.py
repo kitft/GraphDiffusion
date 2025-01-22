@@ -101,7 +101,30 @@ def custom_loss_discrete(f_theta_forward: Callable[[torch.Tensor, torch.Tensor],
 from pytorch_optimizer import SOAP
 
 
-def train(model, dataloader, val_dataloader,max_plot_val=30,warmup_frac=0.1,TrainConfig=None,resume_id=None,init_step=0,plot_fn=plot_loss_curves):
+def train(model, dataloader, val_dataloader,max_plot_val=30,warmup_frac=0.1,TrainConfig=None,resume_id=None,init_step=0,plot_fn=None):
+    """Train a model using the provided dataloaders.
+
+    Args:
+        model: The neural network model to train
+        dataloader: DataLoader containing training data
+        val_dataloader: DataLoader containing validation data
+        max_plot_val: Maximum value for y-axis in loss plots (default: 30)
+        warmup_frac: Fraction of total steps to use for learning rate warmup (default: 0.1) 
+        TrainConfig: Configuration object containing training parameters
+        resume_id: Optional wandb run ID to resume training from (default: None)
+        init_step: Initial step number when resuming training (default: 0)
+        plot_fn: Function to plot training curves (default: None)
+
+    Returns:
+        tuple: (trained model, dictionary containing training losses)
+
+    The function trains the model using the provided dataloaders and configuration.
+    It performs gradient accumulation, learning rate warmup, and logs metrics to wandb.
+    Training can be resumed from a previous run by providing the wandb run ID.
+    The model is saved periodically based on the configuration settings.
+    """
+    if plot_fn is None:
+        plot_fn = lambda *args, **kwargs: None  # Do nothing
 
     name_time = str(int(time.time()))
     name_for_saving_losses = TrainConfig.name+"training_losses"+name_time+ "_"+model.model_type
