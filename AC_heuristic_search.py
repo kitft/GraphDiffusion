@@ -155,7 +155,7 @@ def is_state_actually_in_list(state,states_close_to_finish):
     return np.any(np.all(state == states_close_to_finish, axis=1))
 
 # def vmap_is_state_in_short_distance_torch(states):
-
+from torch_scatter import scatter_max
 def beam_search_fast(env, model, fwd_model, beam_width=100, max_depth=0, check_short_distance=False, skip_redundant_moves=True,attempts=1,start_step=0,many_initial_states=None,expensive_pick_best=True, hashed_states_close_to_finish_torch=None, states_close_to_finish_torch=None,max_forward_pass=None,max_forward_pass_forward_model=None):
     """
     Beam search to solve the cube using model predictions.
