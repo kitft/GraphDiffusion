@@ -156,9 +156,7 @@ def is_state_actually_in_list(state,states_close_to_finish):
 
 # def vmap_is_state_in_short_distance_torch(states):
 
-
-from torch_scatter import scatter_max
-def beam_search_fast(env, model, fwd_model, beam_width=100, max_depth=0, check_short_distance=False, skip_redundant_moves=True,attempts=1,start_step=0,many_initial_states=None,expensive_pick_best=True, hashed_states_close_to_finish_torch=None, states_close_to_finish_torch=None,max_forward_pass=None):
+def beam_search_fast(env, model, fwd_model, beam_width=100, max_depth=0, check_short_distance=False, skip_redundant_moves=True,attempts=1,start_step=0,many_initial_states=None,expensive_pick_best=True, hashed_states_close_to_finish_torch=None, states_close_to_finish_torch=None,max_forward_pass=None,max_forward_pass_forward_model=None):
     """
     Beam search to solve the cube using model predictions.
     
@@ -169,6 +167,8 @@ def beam_search_fast(env, model, fwd_model, beam_width=100, max_depth=0, check_s
         max_depth: Maximum search depth
         check_short_distance: Whether to check if solution is found at each step
         skip_redundant_moves: Whether to skip redundant move sequences
+        max_forward_pass: Number of states to process at a time for the model
+        max_forward_pass_forward_model: Number of states to process at a time for the forward model
     
     Returns:
         success: Whether solution was found
@@ -200,7 +200,6 @@ def beam_search_fast(env, model, fwd_model, beam_width=100, max_depth=0, check_s
     sorted_indices = torch.arange(beam_width*env.num_moves,device=device,dtype=torch.int64)
     #batch_p = torch.zeros((beam_width,env.num_moves),device=device,dtype=torch.float64)
     inverse_indices = torch.zeros((beam_width*env.num_moves),device=device,dtype=torch.int64)
-    reverse_diffusion_probs_func = reverse_diffusion_probs_from_fwd_model_and_scores(fwd_model,env,return_states_out=True,device=device)
 
     if max_forward_pass is not None:
         def model_wrapper(states,t):
@@ -214,6 +213,18 @@ def beam_search_fast(env, model, fwd_model, beam_width=100, max_depth=0, check_s
             return outputs
     else:
         model_wrapper = model
+    if max_forward_pass_forward_model is not None:
+        def forward_model_wrapper(states):
+            outputs = torch.zeros((states.shape[0],env.num_moves),device=device,dtype=torch.float64)
+            for i in range(0, states.shape[0], max_forward_pass_forward_model):
+                chunk_states = states[i:i+max_forward_pass_forward_model]
+                chunk_output = fwd_model(chunk_states)
+                outputs[i:i+max_forward_pass_forward_model] = chunk_output
+            return outputs
+    else:
+        forward_model_wrapper = fwd_model
+
+    reverse_diffusion_probs_func = reverse_diffusion_probs_from_fwd_model_and_scores(forward_model_wrapper,env,return_states_out=True,device=device)
     # Search up to max depth
     for attempt in range(attempts):
         for depth in range(start_step,max_depth):
