@@ -1,4 +1,23 @@
+# Problems:
+
+*The Rubik's Cube* - you know what it is!
+
+*The Andrews-Curtis conjecture*
+The Andrews-Curtis conjecture is a major open problem in group theory. It states that any balanced presentation of the trivial group can be transformed into the empty presentation using only Andrews-Curtis moves. These moves are:
+
+1. Replace r_i with r_i^(-1)
+2. Replace r_i with r_i * r_j where i ≠ j 
+3. Replace r_i with g * r_i * g^(-1) where g is a generator
+
+A presentation is balanced if it has the same number of relators as generators. The conjecture has been open since 1965, and is considered one of the most important problems in combinatorial group theory. It is closely related to the 4-dimensional smooth Poincaré conjecture.
+
+The conjecture is widely believed to be false, and there are many potential counterexamples. The most famous are the Akbulut-Kirby presentations AK(n). These are presentations of the trivial group which seem to get harder to trivialize as n increases. No one has been able to show that AK(3) can be trivialized using Andrews-Curtis moves, despite it being provably trivial by other means.
+
+The difficulty is that the space of possible move sequences grows exponentially, and there's no known way to systematically search it. This makes it a natural target for machine learning approaches.
+
 # Pathfinding on Cayley graphs using diffusion models
+
+
 
 
 This repo contains code for training and evaluating diffusion models for pathfinding on Cayley graphs. The simplest cases are the general permutation group, and the 2x2x2 and 3x3x3 cube groups. This is the repository attached to the paper "Diffusion Models for Cayley Graphs" (ADV. THEOR. MATH. PHYS. 2025).
@@ -13,7 +32,10 @@ This method is considerably more sample efficient (by more than an order of magn
 
 # Applications to the Andrews-Curtis conjecture (*in progress*)
 
+
 We can apply the same methods to the Andrews-Curtis conjecture. Starting with a presentation of the trivial group, apply random Andrews-Curtis moves of type AC1' and AC2' (see https://arxiv.org/abs/2408.15332). Then learn to invert this diffusive process.
+
+
 
 We restrict to balanced presentations with two relators and two generators.
 
