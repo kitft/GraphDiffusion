@@ -41,8 +41,6 @@ We restrict to balanced presentations with two relators and two generators.
 
 We are able to trivialise AK(2) using this method. We are not able to trivialise AK(3), so far. AK(3) is the first element in the Akbulut-Kirby series which is not known to be trivial (or, indeed, stably trivial).
 
-We can also *improve* the forward diffusive process, by training it to explore the search space using reinforcement learning. I have implemented a variety of training objectives to reward exploration, including a diversity bonus, complexity bonus, entropy selection, penalty for not using moves, etc. This is a work in progress.
-
 # NN models implemented:
 
 - `FF_residual_model`: A feedforward residual network with a time embedding.
