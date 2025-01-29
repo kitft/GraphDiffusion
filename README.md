@@ -5,13 +5,13 @@
 *The Andrews-Curtis conjecture*
 The Andrews-Curtis conjecture is a major open problem in group theory. It states that any balanced presentation of the trivial group can be transformed into the empty presentation using only Andrews-Curtis moves. These moves are:
 
-1. Replace rᵢ with rᵢ⁻¹
-2. Replace rᵢ with rᵢ · rⱼ where i ≠ j
-3. Replace rᵢ with g · rᵢ · g⁻¹ where g is a generator
+ 1. Replace $r_i$ with $r_i^{-1}$
+ 2. Replace $r_i$ with $r_i * r_j$ where $i ≠ j$
+3.  Replace $r_i$ with $g * r_i * g^{-1}$ where g is a generator
 
 A presentation is balanced if it has the same number of relators as generators. The conjecture has been open since 1965, and is considered one of the most important problems in combinatorial group theory. It is closely related to the 4-dimensional smooth Poincaré conjecture.
 
-The conjecture is widely believed to be false, and there are many potential counterexamples. The most famous are the Akbulut-Kirby presentations AK(n). These are presentations of the trivial group which seem to get harder to trivialize as n increases. No one has been able to show that AK(3) can be trivialized using Andrews-Curtis moves, despite it being provably trivial by other means.
+The conjecture is widely believed to be false, and there are many potential counterexamples. The most famous are the Akbulut-Kirby presentations AK(n). These are presentations of the trivial group which seem to get harder to trivialize as n increases. No one has been able to show that $AK(3)$ can be trivialized using Andrews-Curtis moves, despite it being provably trivial by other means.
 
 The difficulty is that the space of possible move sequences grows exponentially, and there's no known way to systematically search it. This makes it a natural target for machine learning approaches.
 
@@ -22,7 +22,7 @@ The difficulty is that the space of possible move sequences grows exponentially,
 
 This repo contains code for training and evaluating diffusion models for pathfinding on Cayley graphs. The simplest cases are the general permutation group, and the 2x2x2 and 3x3x3 cube groups. This is the repository attached to the paper "Diffusion Models for Cayley Graphs" (ADV. THEOR. MATH. PHYS. 2025).
 
-In the past, people have proposed learning the inverse of scrambling trajectories from the solved state solve the Rubik's cube. We simply propose taking that idea  seriously, and thereby consider the problem as a diffusion modelling exercise. The scrambling defines a forward diffusion process starting from the solved configuration, which is a time-homogeneous discrete-time Markov chain. It has an inverse which can be written analytically and is also a Markov chain, but time-inhomogeneous. If the transition kernel for the forward process is $q_t(x_{t+1}|x_t)=q(x_{t+1}|x_t)$ then the transition kernel for the inverse process is $\tilde{q}_t(x_{t-1}|x_t)=q(x_t|x_{t-1})\frac{p_{t-1}(x_{t-1})}{p_t(x_t)}$ where $p_t$ is the distribution from the forward process at time $t$.
+In the past, people have proposed learning the inverse of scrambling trajectories from the solved state solve the Rubik's cube. We simply propose taking that idea  seriously, and thereby consider the problem as a diffusion modelling exercise. The scrambling defines a forward diffusion process starting from the solved configuration, which is a time-homogeneous discrete-time Markov chain. It has an inverse which can be written analytically and is also a Markov chain, but time-inhomogeneous. If the transition kernel for the forward process is $q_t(x_{t+1}|x_t)=q(x_{t+1}|x_t)$ then the transition kernel for the inverse process is $r_t(x_{t-1}|x_t)=q(x_t|x_{t-1})\frac{p_{t-1}(x_{t-1})}{p_t(x_t)}$ where $p_t$ is the distribution from the forward process at time $t$.
 
 Minimising a suitable choice of score-matching objective (a Bregman divergence), the model learns the inverse of the scrambling process. Running the inverse diffusive process, in principle we solve the pathfinding problem.
 
@@ -39,9 +39,9 @@ We can apply the same methods to the Andrews-Curtis conjecture. Starting with a 
 
 We restrict to balanced presentations with two relators and two generators.
 
-We are able to trivialise AK(2) using this method. We are not able to trivialise AK(3), so far. AK(3) is the first element in the Akbulut-Kirby series which is not known to be trivial (or, indeed, stably trivial).
+We are able to trivialise $AK(2)$ using this method. We are not able to trivialise $AK(3)$, so far. $AK(3)$ is the first element in the Akbulut-Kirby series which is not known to be trivial (or, indeed, stably trivial).
 
-We can also *improve* the forward diffusive process, by training it to explore the search space using reinforcement learning. I have implemented a variety of training objectives to reward exploration, including a diversity bonus, complexity bonus, entropy selection, penalty for not using moves, etc. This is a work in progress.
+We can also *improve* the forward diffusive process, by training it to explore the search space using reinforcement learning or simply deterministically modifying the diffusive process. I have implemented a variety of training objectives to reward exploration, including a diversity bonus, complexity bonus, entropy selection, penalty for not using moves, etc. This is a work in progress.
 
 # NN models implemented:
 
