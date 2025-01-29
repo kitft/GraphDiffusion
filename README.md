@@ -5,9 +5,9 @@
 *The Andrews-Curtis conjecture*
 The Andrews-Curtis conjecture is a major open problem in group theory. It states that any balanced presentation of the trivial group can be transformed into the empty presentation using only Andrews-Curtis moves. These moves are:
 
-1. Replace r_i with r_i^(-1)
-2. Replace r_i with r_i * r_j where i ≠ j 
-3. Replace r_i with g * r_i * g^(-1) where g is a generator
+1. Replace rᵢ with rᵢ⁻¹
+2. Replace rᵢ with rᵢ · rⱼ where i ≠ j
+3. Replace rᵢ with g · rᵢ · g⁻¹ where g is a generator
 
 A presentation is balanced if it has the same number of relators as generators. The conjecture has been open since 1965, and is considered one of the most important problems in combinatorial group theory. It is closely related to the 4-dimensional smooth Poincaré conjecture.
 
