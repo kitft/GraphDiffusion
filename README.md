@@ -28,7 +28,7 @@ Minimising a suitable choice of score-matching objective (a Bregman divergence),
 
 Our method is considerably more sample efficient (by more than an order of magnitude) than the previous best method, EfficientCube, and more performant at the same beam width. EfficientCube uses a neural network to directly predict the inverse of each scrambling move. Considering the long-time limit of the scrambling process training EfficientCube, one can easily see that it becomes problematic: if one were to train with $T$ to $\infty$, just learning the inverse of each scrambling move would be meaningless, as the stationary distribution after time $T$ would be the uniform distribution. Instead learning the inverse of the diffusive process, the network can able to distinguish between  early and late stages. Theoretically, therefore, we *remove* a hyperparameter from the training process, as we could use any $T$ that is sufficiently large. In practice, of course, we need to train with a finite $T$, but this is still a significant improvement.
 
-For the same beam width of $2**18$, we achieve an average solution length (on a list of 1000 hard configurations) of $22.15$, vs $22.26$ in EfficientCube. We achieve this after seeing just 100 million configurations.
+For the same beam width of $2^18$, we achieve an average solution length (on a list of 1000 hard configurations) of $22.15$, vs $22.26$ in EfficientCube. We achieve this after seeing just 100 million configurations.
 
 ![Comparison](images/Comparison.png)
 
