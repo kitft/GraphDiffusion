@@ -65,6 +65,12 @@ The main files are:
 - `cube_training.py`: contains the training loop for the cube groups.
 - `heuristic_searches.py`: contains the heuristic search methods.
 
+# Steps to replicate
+
+- clone this repository
+- pip install `torch-scatter wandb torch tqdm matplotlib`
+- Run `3D Cube Demo.ipynb` with the preconfigured hyperparameters
+- Download the test set using the included code in the demo notebook 
 
 # Troubleshoot:
 
