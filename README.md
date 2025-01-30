@@ -1,9 +1,13 @@
-# Problems:
+This repo contains code for training and evaluating diffusion models for pathfinding on Cayley graphs. The simplest cases are the general permutation group, and the 2x2x2 and 3x3x3 cube groups. This is the repository attached to the paper "Diffusion Models for Cayley Graphs" (upcoming, ADV. THEOR. MATH. PHYS. 2025).
+
+# Settings:
 
 *The Rubik's Cube* - you know what it is!
 
 *The Andrews-Curtis conjecture*
-The Andrews-Curtis conjecture is a major open problem in group theory. It states that any balanced presentation of the trivial group can be transformed into the empty presentation using only Andrews-Curtis moves. These moves are:
+The Andrews-Curtis conjecture is a major open problem in combinatorial group theory. A group presentation is typically written $\langle x_1,\cdots, x_n\;|\;r_1(x_i),\cdots,r_n(x_i)\rangle$, where $r_k(x)$ is equal to the identity (e.g. $\mathbb{Z}_2 \times \mathbb{Z}_2  = \langle x_1,x_2\;|\; x_1^2 x_2^2\rangle$). The conjecture states that any balanced (equal number of generators $x_i$ and relators $r_i$) presentation of the trivial group can be transformed into the empty presentation using only Andrews-Curtis moves.   
+
+The Andrews-Curtis moves are:
 
  1. Replace $r_i$ with $r_i^{-1}$
  2. Replace $r_i$ with $r_i * r_j$ where $i ≠ j$
@@ -17,10 +21,6 @@ The difficulty is that the space of possible move sequences grows exponentially,
 
 # Pathfinding on Cayley graphs using diffusion models
 
-
-
-
-This repo contains code for training and evaluating diffusion models for pathfinding on Cayley graphs. The simplest cases are the general permutation group, and the 2x2x2 and 3x3x3 cube groups. This is the repository attached to the paper "Diffusion Models for Cayley Graphs" (ADV. THEOR. MATH. PHYS. 2025).
 
 In the past, people have proposed learning the inverse of scrambling trajectories from the solved state solve the Rubik's cube. We simply propose taking that idea  seriously, and thereby consider the problem as a diffusion modelling exercise. The scrambling defines a forward diffusion process starting from the solved configuration, which is a time-homogeneous discrete-time Markov chain. It has an inverse which can be written analytically and is also a Markov chain, but time-inhomogeneous. If the transition kernel for the forward process is $q_t(x_{t+1}|x_t)=q(x_{t+1}|x_t)$ then the transition kernel for the inverse process is $r_t(x_{t-1}|x_t)=q(x_t|x_{t-1})\frac{p_{t-1}(x_{t-1})}{p_t(x_t)}$ where $p_t$ is the distribution from the forward process at time $t$.
 
