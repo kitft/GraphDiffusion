@@ -84,7 +84,7 @@ Otherwise, run the following, where ${CUDA} should be replaced by either cpu, cu
 pip install torch-scatter -f https://data.pyg.org/whl/torch-2.1.0+${CUDA}.html
 ```
 
-Ensure you have installed wandb, pytorch_optimizer, and tqdm.
+Ensure you have installed `wandb`, `pytorch_optimizer`, and `tqdm`.
 
 # Credit
 Rubik's cube environment, and statistical comparison data taken from EfficientCube by K. Takano.

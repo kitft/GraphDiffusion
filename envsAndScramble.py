@@ -48,7 +48,8 @@ class Cube3:
         degrees_inference = degrees[::-1]
         self.moves = [f"{f}{n}" for f in faces for n in degrees]
         self.moves_inference = [f"{f}{n}" for f in faces for n in degrees_inference]
-
+        self.moves_ix_torch = torch.arange(len(self.moves), device = 'cuda' if torch.cuda.is_available() else 'cpu')
+        self.inverse_moves_ix_torch = torch.tensor([1,0,3,2,5,4,7,6,9,8,11,10], device = 'cuda' if torch.cuda.is_available() else 'cpu')
         # Opposite faces
         self.pairing = {
             "R": "L",
@@ -71,6 +72,7 @@ class Cube3:
             for m, available_moves in self.moves_available_after.items()
         }
         self.moves_ix_inference = [self.moves.index(m) for m in self.moves_inference]
+        
         self.pairing_ix = {
             0: 1,
             1: 0,
@@ -238,6 +240,10 @@ class Cube3:
         self.sticker_target_ix = np.array([np.array(self.sticker_target[m]) for m in self.moves])
         self.sticker_source_ix = np.array([np.array(self.sticker_source[m]) for m in self.moves])
 
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.sticker_target_ix_torch = torch.tensor(self.sticker_target_ix, dtype=torch.long, device=device)
+        self.sticker_source_ix_torch = torch.tensor(self.sticker_source_ix, dtype=torch.long, device=device)
+
 
 
 import torch
@@ -339,6 +345,10 @@ class PermutationGroup:
         # For index slicing
         self.sticker_target_ix = np.array([np.array(self.sticker_target[m]) for m in self.moves])
         self.sticker_source_ix = np.array([np.array(self.sticker_source[m]) for m in self.moves])
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.sticker_target_ix_torch = torch.tensor(self.sticker_target_ix, dtype=torch.long, device=device)
+        self.sticker_source_ix_torch = torch.tensor(self.sticker_source_ix, dtype=torch.long, device=device)
+    
         # print("target")
         # print(self.sticker_target_ix)
         # print("source")
@@ -769,6 +779,33 @@ def apply_move_vec(state: torch.Tensor, move_index: int, sticker_source_ix: torc
     new_state[:, target] = state[:, source]
     return new_state
 
+# @torch.jit.script
+# def BAD_apply_list_of_moves_to_states(states: torch.Tensor, moves: torch.Tensor, sticker_source_ix: torch.Tensor, sticker_target_ix: torch.Tensor) -> torch.Tensor:
+#     # Get all source and target indices for the moves at once
+#     target = sticker_target_ix[moves]  # Shape: [num_moves, target_indices_per_move]
+#     source = sticker_source_ix[moves]  # Shape: [num_moves, source_indices_per_move]
+    
+#     # Clone states before modifying to avoid warning about expanded tensors
+#     states_clone = states.clone()
+#     states_clone[:, target] = states[:, source]
+#     return states_clone
+
+@torch.jit.script
+def apply_list_of_moves_to_states(states: torch.Tensor, moves: torch.Tensor, sticker_source_ix: torch.Tensor, sticker_target_ix: torch.Tensor) -> torch.Tensor:
+    # Get all source and target indices for the moves at once
+    target = sticker_target_ix[moves]  # Shape: [batch_size, target_indices_per_move]
+    source = sticker_source_ix[moves]  # Shape: [batch_size, source_indices_per_move]
+    
+    # Clone states before modifying to avoid warning about expanded tensors
+    states_clone = states.clone()
+    
+    # Create batch indices that match the expanded target/source shapes
+    batch_idx = torch.arange(states.shape[0], device=states.device)[:, None].expand(-1, target.shape[1])
+    
+    # Use advanced indexing with properly shaped batch indices
+    states_clone[batch_idx.flatten(), target.flatten()] = states[batch_idx.flatten(), source.flatten()]
+    return states_clone
+
 @torch.jit.script
 def apply_all_moves_to_all_states(x,STICKER_SOURCE_IX,STICKER_TARGET_IX):
     #device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -799,6 +836,104 @@ def apply_all_moves_to_all_states_no_reshape(x: torch.Tensor,out_tensor: torch.T
     for move in range(num_moves):
         out_tensor[move*batch_size:(move+1)*batch_size, STICKER_TARGET_IX[move]] = x[:, STICKER_SOURCE_IX[move]]
     return out_tensor
+
+
+
+def generate_trajectory_torch_batch_cube(batch_size,scramble_length, env,device,start_state, return_apply_all,fwd_diffusion_function, compute_all_states=True, apply_time = False, start_states_in_ball = 0):
+    """
+    Generates a single batch of scrambled states and their corresponding moves.
+
+    Args:
+        batch_size (int): Number of trajectories to generate in parallel
+        scramble_length (int): Length of each scramble sequence
+        env: The cube environment
+        device (str): Device to place tensors on ('cpu' or 'cuda')
+        start_state (torch.Tensor): Initial state to start scrambling from
+        return_apply_all (bool): Whether to return all possible next states
+        fwd_diffusion_function (callable): Function that computes move probabilities for each state (including masking bad moves)
+
+    Returns:
+        tuple:
+            - states (torch.Tensor): States for each step of each trajectory (batch_size, scramble_length+1, state_size)
+            - moves (torch.Tensor): Moves taken at each step (batch_size, scramble_length)
+            - all_next_states (torch.Tensor or None): If return_apply_all is True, contains all possible next states
+    """
+    # Initialize tensors to store batch
+    states = torch.zeros((batch_size, scramble_length+1, env.state.size), device=device, dtype=start_state.dtype)
+    moves = torch.zeros((batch_size, scramble_length), dtype=torch.long, device=device)
+    if return_apply_all:
+        all_next_states = torch.zeros((batch_size, scramble_length+1, env.num_moves, env.state.size), device=device, dtype=start_state.dtype)
+        
+    else:
+        all_next_states = None
+    if start_states_in_ball == 0:
+        states[:,0] = start_state.clone()
+        current_states = start_state.clone().expand(batch_size, -1)
+    else:
+        # For each state, randomly choose how many moves to apply (0 to start_states_in_ball)
+        num_moves_per_state = torch.randint(0, start_states_in_ball + 1, (batch_size,), device=device)
+        current_states = start_state.clone().expand(batch_size, -1)
+        
+        # For states that need moves, generate and apply them
+        max_moves = num_moves_per_state.max()
+        if max_moves > 0:
+            moves_to_apply = torch.randint(0, env.num_moves, (batch_size, max_moves), device=device)
+            for i in range(max_moves):
+                # Only apply moves to states that need this many moves
+                mask = i < num_moves_per_state
+                if mask.any():
+                    # Clone before indexing to avoid warning on expanded tensor
+                    current_states = current_states.clone()
+                    current_states[mask] = apply_list_of_moves_to_states(
+                        current_states[mask], 
+                        moves_to_apply[mask,i], 
+                        env.sticker_source_ix_torch, 
+                        env.sticker_target_ix_torch
+                    )
+        states[:,0] = current_states.clone()
+
+    # Generate scrambles for all items in batch simultaneously
+    #if return_apply_all:
+    #    all_next_states[:,0,:,:] = apply_all_moves_to_all_states(current_states,env.sticker_source_ix_torch,env.sticker_target_ix_torch)
+    
+    for s in range(scramble_length):
+        # Compute weights for all states in batch using vectorized computation
+        #weights = compute_weights_from_state_vec(current_states, env, weight_contraction, total_relator_weight, double_weight=double_weight)
+        if apply_time:
+            time_input = torch.tensor([(s)/scramble_length], device=device).expand(batch_size)
+        if return_apply_all and not compute_all_states:
+            all_next_states[:,s,:,:] = apply_all_moves_to_all_states(current_states,env.sticker_source_ix_torch,env.sticker_target_ix_torch)
+        if compute_all_states:
+            if apply_time:
+                weights_BM, all_next_states_BMS = fwd_diffusion_function(current_states,time_input)# all next states of current_states, which is [:,s]. so should go in [s]
+            else:
+                weights_BM, all_next_states_BMS = fwd_diffusion_function(current_states)
+            batch_moves_B = torch.multinomial(weights_BM, num_samples=1).squeeze(-1)
+            current_states = all_next_states_BMS[torch.arange(batch_size),batch_moves_B,:]
+        else:
+            if apply_time:
+                weights_BM = fwd_diffusion_function(current_states,time_input)
+            else:
+                weights_BM = fwd_diffusion_function(current_states)
+            #all_next_states_BMS = apply_all_moves_to_all_states(current_states.reshape(-1, env.state_dim),STICKER_SOURCE_IX,STICKER_TARGET_IX).view(-1, env.num_moves, env.state_dim)
+            batch_moves_B = torch.multinomial(weights_BM, num_samples=1).squeeze(-1)
+            current_states = apply_list_of_moves_to_states(current_states, batch_moves_B, env.sticker_source_ix_torch, env.sticker_target_ix_torch)
+        if return_apply_all and compute_all_states:
+            all_next_states[:,s,:,:] = all_next_states_BMS
+        # Apply moves to all states at once
+        #next_states_BS = finger_ix_fast_vec_torch_list_of_moves(current_states, batch_moves_B)
+        # Store results
+        
+        states[:,s+1] = current_states
+        moves[:,s] = batch_moves_B
+
+        
+    if return_apply_all:# at the end
+        all_next_states[:,scramble_length,:,:] = apply_all_moves_to_all_states(current_states,env.sticker_source_ix_torch,env.sticker_target_ix_torch)
+        all_next_states = all_next_states
+    else:
+        all_next_states = None
+    return states.detach(), moves.detach(), all_next_states.detach()
 
 
 # def apply_all_moves_to_all_states_base(x: torch.Tensor,

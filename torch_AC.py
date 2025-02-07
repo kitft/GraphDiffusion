@@ -1389,8 +1389,38 @@ def reverse_diffusion_probs_from_fwd_model_and_scores(fwd_model,env,return_state
             return learned_fwd_policy
     return func_for_reverse
 
+def reverse_diffusion_probs_from_fwd_model_and_scores_time(fwd_model,env,return_states_out=False,device=None):
+    """
+    fwd_model is a function that takes in a state and a time, and returns a probability distribution over moves.
+    note that the fwd_model should not return out_states. We don't need the out states, as fwd_model is already itself processsing (gx) for all x inputted into the reverse diffusive process.
+    """
+    if device is None:
+        if hasattr(fwd_model, 'parameters'):
+            device = next(fwd_model.parameters()).device
+        else:
+            device = 'cpu'
+    moves = torch.arange(env.num_moves,device=device)
+    inverse_moves = torch.tensor(env.inverse_moves,device=device)
+    
+    def func_for_reverse(states,times,scores, return_states_out=return_states_out):
+        #times are indexed from 0 to max_depth-1, as fwd_model adds 1.
+        scores = scores.to(device)
+        states = states.to(device)
+        times = times.to(device)
+        #print(states.shape)
+        good_moves_mask,states_out = mask_impossible_moves(states,env,return_states_out=True)
+        with torch.no_grad():# is this the right time coordinate?
+            weights_from_gx_to_x = fwd_model(states_out.reshape(-1,env.state_dim),times.repeat_interleave(env.num_moves)).reshape(-1,env.num_moves,env.num_moves)[:,moves,inverse_moves]
+        learned_fwd_policy = weights_from_gx_to_x*good_moves_mask*scores
+        learned_fwd_policy = learned_fwd_policy/learned_fwd_policy.sum(dim=-1,keepdims=True)
+        if return_states_out:
+            return learned_fwd_policy,states_out
+        else:
+            return learned_fwd_policy
+    return func_for_reverse
+
 #def scrambler_torch_batch(env, scramble_length, batch_size=1, device='cpu', return_apply_all=False, weight_contraction=3, total_relator_weight=0.16, start_state=None, block_inverse_moves=False, double_weight=None):
-def scrambler_torch_batch(env, scramble_length, batch_size=1, device='cpu', return_apply_all=False,start_state=None, model=None):
+def scrambler_torch_batch(env, scramble_length, batch_size=1, device='cpu', return_apply_all=False,start_state=None, model=None,compute_all_states=True):
     """
     Generates batches of scrambled states and their corresponding moves, computing weights and applying moves in batches.
     Returns tensors of shape:
@@ -1407,12 +1437,68 @@ def scrambler_torch_batch(env, scramble_length, batch_size=1, device='cpu', retu
     if False:
         fwd_diffusion_function = lambda x: compute_weights_from_state_vec(x, env, weight_contraction, total_relator_weight, double_weight=double_weight)
     else:
-        fwd_diffusion_function = fwd_diffusion_probs_func_from_model(model,env,return_states_out=True)
+        fwd_diffusion_function = fwd_diffusion_probs_func_from_model(model,env,return_states_out=compute_all_states)
 
     while True:
-        yield generate_trajectory_torch_batch(batch_size,scramble_length, env,device,start_state,return_apply_all,fwd_diffusion_function)
+        yield generate_trajectory_torch_batch(batch_size,scramble_length, env,device,start_state,return_apply_all,fwd_diffusion_function, compute_all_states=compute_all_states)
 
-def generate_trajectory_torch_batch(batch_size,scramble_length, env,device,start_state, return_apply_all,fwd_diffusion_function):
+# def generate_trajectory_torch_batch(batch_size,scramble_length, env,device,start_state, return_apply_all,fwd_diffusion_function, compute_all_states=True):
+#     """
+#     Generates a single batch of scrambled states and their corresponding moves.
+
+#     Args:
+#         batch_size (int): Number of trajectories to generate in parallel
+#         scramble_length (int): Length of each scramble sequence
+#         env: The cube environment
+#         device (str): Device to place tensors on ('cpu' or 'cuda')
+#         start_state (torch.Tensor): Initial state to start scrambling from
+#         return_apply_all (bool): Whether to return all possible next states
+#         fwd_diffusion_function (callable): Function that computes move probabilities for each state (including masking bad moves)
+
+#     Returns:
+#         tuple:
+#             - states (torch.Tensor): States for each step of each trajectory (batch_size, scramble_length+1, state_size)
+#             - moves (torch.Tensor): Moves taken at each step (batch_size, scramble_length)
+#             - all_next_states (torch.Tensor or None): If return_apply_all is True, contains all possible next states
+#     """
+#     # Initialize tensors to store batch
+#     states = torch.zeros((batch_size, scramble_length+1, env.state.size), device=device, dtype=start_state.dtype)
+#     moves = torch.zeros((batch_size, scramble_length), dtype=torch.long, device=device)
+#     states[:,0] = start_state.clone().detach()
+    
+#     # Generate scrambles for all items in batch simultaneously
+#     current_states = start_state.clone().detach().expand(batch_size, -1)
+    
+#     for s in range(scramble_length):
+#         # Compute weights for all states in batch using vectorized computation
+#         #weights = compute_weights_from_state_vec(current_states, env, weight_contraction, total_relator_weight, double_weight=double_weight)
+#         if compute_all_states:
+#             weights_BM, all_next_states_BMS = fwd_diffusion_function(current_states)
+#             batch_moves_B = torch.multinomial(weights_BM, num_samples=1).squeeze(-1)
+#             current_states = all_next_states_BMS[torch.arange(batch_size),batch_moves_B,:]
+#         else:
+#             weights_BM = fwd_diffusion_function(current_states)
+#             #all_next_states_BMS = apply_all_moves_to_all_states(current_states.reshape(-1, env.state_dim),STICKER_SOURCE_IX,STICKER_TARGET_IX).view(-1, env.num_moves, env.state_dim)
+#             batch_moves_B = torch.multinomial(weights_BM, num_samples=1).squeeze(-1)
+#             current_states = apply_list_of_moves_to_states(current_states, batch_moves_B, env.sticker_source_ix_torch, env.sticker_target_ix_torch)
+#         # Apply moves to all states at once
+#         #next_states_BS = finger_ix_fast_vec_torch_list_of_moves(current_states, batch_moves_B)
+#         # Store results
+#         raise Exception("Not fixed - the all_next_states stuff is wrong")
+        
+#         states[:,s+1] = current_states
+#         moves[:,s] = batch_moves_B
+    
+#     if return_apply_all:
+#         all_next_states = all_next_states_BMS
+#     else:
+#         all_next_states = None
+#     return states, moves, all_next_states
+
+
+
+
+def generate_trajectory_torch_batch_AC_options(batch_size,scramble_length, env,device,start_state, return_apply_all,fwd_diffusion_function, compute_all_states=True, apply_time = False, start_with_both = False, start_states_in_ball = 0):
     """
     Generates a single batch of scrambled states and their corresponding moves.
 
@@ -1434,29 +1520,84 @@ def generate_trajectory_torch_batch(batch_size,scramble_length, env,device,start
     # Initialize tensors to store batch
     states = torch.zeros((batch_size, scramble_length+1, env.state.size), device=device, dtype=start_state.dtype)
     moves = torch.zeros((batch_size, scramble_length), dtype=torch.long, device=device)
-    states[:,0] = start_state.clone().detach()
+    if return_apply_all:
+        all_next_states = torch.zeros((batch_size, scramble_length+1, env.num_moves, env.state.size), device=device, dtype=start_state.dtype)
+        
+    else:
+        all_next_states = None
+    swapped_start_state = torch.cat((start_state[env.max_relator_length:],start_state[:env.max_relator_length]))
+    if start_with_both:
+        states[:,0] = torch.where(
+            torch.rand(batch_size, device=device)[:, None] < 0.5,
+            start_state.clone(),
+            swapped_start_state.clone()
+        )
+    else:
+        states[:,0] = start_state.clone()
+    if start_states_in_ball != 0:
+        # For each state, randomly choose how many moves to apply (0 to start_states_in_ball)
+        num_moves_per_state = torch.randint(0, start_states_in_ball + 1, (batch_size,), device=device)
+        current_states = states[:,0].clone()
+        
+        # For states that need moves, generate and apply them
+        max_moves = num_moves_per_state.max()
+        if max_moves > 0:
+            moves_to_apply = torch.randint(0, env.num_moves, (batch_size, max_moves), device=device)
+            for i in range(max_moves):
+                # Only apply moves to states that need this many moves
+                mask = i < num_moves_per_state
+                if mask.any():
+                    # Clone before indexing to avoid warning on expanded tensor
+                    current_states = current_states.clone()
+                    current_states[mask] = finger_ix_fast_vec_torch_list_of_moves(
+                        current_states[mask], 
+                        moves_to_apply[mask,i]
+                    )
+        states[:,0] = current_states.clone()
+
+
     
     # Generate scrambles for all items in batch simultaneously
-    current_states = start_state.clone().detach().expand(batch_size, -1)
+    current_states = states[:,0].clone().detach()
     
     for s in range(scramble_length):
         # Compute weights for all states in batch using vectorized computation
         #weights = compute_weights_from_state_vec(current_states, env, weight_contraction, total_relator_weight, double_weight=double_weight)
-        weights_BM, all_next_states_BMS = fwd_diffusion_function(current_states)
-        batch_moves_B = torch.multinomial(weights_BM, num_samples=1).squeeze(-1)
-        # Apply moves to all states at once
-        #next_states_BS = finger_ix_fast_vec_torch_list_of_moves(current_states, batch_moves_B)
-        # Store results
-        current_states = all_next_states_BMS[torch.arange(batch_size),batch_moves_B,:]
+        if apply_time:
+            time_input = torch.tensor([(s)/scramble_length], device=device).expand(batch_size)
+        if return_apply_all and not compute_all_states:
+            raise Exception("Not fixed - the all_next_states stuff is wrong")
+            all_next_states[:,s,:,:] = apply_all_moves_to_all_states(current_states,env.sticker_source_ix_torch,env.sticker_target_ix_torch)
+        if compute_all_states:
+            if apply_time:
+                weights_BM, all_next_states_BMS = fwd_diffusion_function(current_states,time_input)# all next states of current_states, which is [:,s]. so should go in [s]
+            else:
+                weights_BM, all_next_states_BMS = fwd_diffusion_function(current_states)
+            weights_BM = weights_BM.detach()
+            all_next_states_BMS = all_next_states_BMS.detach()
+            batch_moves_B = torch.multinomial(weights_BM, num_samples=1).squeeze(-1)
+            current_states = all_next_states_BMS[torch.arange(batch_size),batch_moves_B,:].detach()
+            
+            if return_apply_all:
+                all_next_states[:,s,:,:] = all_next_states_BMS
+        else:
+            raise Exception("Not fixed - the all_next_states stuff is wrong")
+            if apply_time:
+                weights_BM = fwd_diffusion_function(current_states,time_input).detach()
+            else:
+                weights_BM = fwd_diffusion_function(current_states).detach()
+            batch_moves_B = torch.multinomial(weights_BM, num_samples=1).squeeze(-1)
+            current_states = finger_ix_fast_vec_torch_list_of_moves(current_states, batch_moves_B).detach()
+
         states[:,s+1] = current_states
         moves[:,s] = batch_moves_B
-    
-    if return_apply_all:
-        all_next_states = all_next_states_BMS
-    else:
-        all_next_states = None
-    return states, moves, all_next_states
 
+        
+    if return_apply_all and not compute_all_states:# at the end
+        raise Exception("Not fixed - the all_next_states stuff is wrong")
+        all_next_states[:,scramble_length,:,:] = apply_all_moves_to_all_states(current_states,env.sticker_source_ix_torch,env.sticker_target_ix_torch)
+        all_next_states = all_next_states
+    return states.detach(), moves.detach(), all_next_states.detach() if all_next_states is not None else None
 
 # def generate_trajectory_torch_batch_RL(batch_size,scramble_length, env,device,start_state,fwd_diffusion_function):
 #     """

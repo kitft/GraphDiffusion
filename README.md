@@ -68,7 +68,7 @@ The main files are:
 # Steps to replicate
 
 - clone this repository
-- pip install `wandb torch tqdm matplotlib`
+- pip install `wandb torch tqdm matplotlib pytorch-optimizer`
 - Run `3D Cube Demo.ipynb` with the preconfigured hyperparameters
 - Download the test set using the included code in the demo notebook 
 
@@ -84,7 +84,7 @@ Otherwise, run the following, where ${CUDA} should be replaced by either cpu, cu
 pip install torch-scatter -f https://data.pyg.org/whl/torch-2.1.0+${CUDA}.html
 ```
 
-Ensure you have installed `wandb`, `pytorch_optimizer`, and `tqdm`.
+Ensure you have installed all packages.
 
 # Credit
 Rubik's cube environment, and statistical comparison data taken from EfficientCube by K. Takano.

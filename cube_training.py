@@ -148,6 +148,7 @@ def train(model, dataloader, val_dataloader, max_plot_val=30, warmup_frac=0.1, r
     params_millions = round(num_params / 1_000_000)
     params_str = f"{params_millions}M"
     name_for_saving_model += f"_{params_str}"
+    env = TrainConfig.env
     wandb.init(
     # set the wandb project where this run will be logged
     project="DiscreteDiffusion",

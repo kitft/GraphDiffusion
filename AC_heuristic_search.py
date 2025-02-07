@@ -3,6 +3,7 @@ import torch
 import os
 import time
 from AC_training import *
+from torch_AC import *
 """
 Must define the environment before using this file.
 """
@@ -37,7 +38,7 @@ def get_AKn_state(n, max_relator_length=100):
 
 
 # Function to get all states n moves away from solved state
-def get_states_n_moves_away_AC(env,n):
+def get_states_n_moves_away_AC(env,n, start_from_solved_state = True):
     #env=AC_presentation()
     if n > 6:
         raise ValueError("n should not be greater than 6 to avoid excessive computation time")
@@ -53,8 +54,8 @@ def get_states_n_moves_away_AC(env,n):
             env.do_move_to_state_flexible(move)
             dfs(depth + 1,env.state.copy())
             #env.finger_ix_fast(env.inverse_moves[move])  # Undo the move
-    
-    env.reset()  # Start from solved state
+    if start_from_solved_state:
+        env.reset()  # Start from solved state
     dfs(0,env.state.copy())
     return np.array(states)
 
@@ -214,17 +215,18 @@ def beam_search_fast(env, model, fwd_model, beam_width=100, max_depth=0, check_s
     else:
         model_wrapper = model
     if max_forward_pass_forward_model is not None:
-        def forward_model_wrapper(states):
+        def forward_model_wrapper(states, t=None):
             outputs = torch.zeros((states.shape[0],env.num_moves),device=device,dtype=torch.float64)
             for i in range(0, states.shape[0], max_forward_pass_forward_model):
                 chunk_states = states[i:i+max_forward_pass_forward_model]
-                chunk_output = fwd_model(chunk_states)
+                chunk_t = None if t is None else t[i:i+max_forward_pass_forward_model]
+                chunk_output = fwd_model(chunk_states) if t is None else fwd_model(chunk_states, chunk_t)
                 outputs[i:i+max_forward_pass_forward_model] = chunk_output
             return outputs
     else:
         forward_model_wrapper = fwd_model
 
-    reverse_diffusion_probs_func = reverse_diffusion_probs_from_fwd_model_and_scores(forward_model_wrapper,env,return_states_out=True,device=device)
+    reverse_diffusion_probs_func = reverse_diffusion_probs_from_fwd_model_and_scores_time(forward_model_wrapper,env,return_states_out=True,device=device)
     # Search up to max depth
     for attempt in range(attempts):
         for depth in range(start_step,max_depth):
@@ -237,7 +239,7 @@ def beam_search_fast(env, model, fwd_model, beam_width=100, max_depth=0, check_s
 
             #new_states = apply_all_moves_to_all_states_torch_jit(candidate_states[:current_width])
             #batch_probs = get_probabilities_from_model_output(batch_scores,candidate_states[:current_width],new_states,env,weight_contraction=TrainConfig.weight_contraction,total_relator_weight=TrainConfig.total_relator_weight,double_weight=TrainConfig.double_weight)
-            batch_probs, new_states = reverse_diffusion_probs_func(candidate_states[:current_width],batch_scores,return_states_out=True)
+            batch_probs, new_states = reverse_diffusion_probs_func(candidate_states[:current_width],t-1/max_depth,batch_scores,return_states_out=True)
             log_batch_p = torch.log(batch_probs + torch.finfo(batch_probs.dtype).eps)  # Add dtype-appropriate epsilon to avoid log(0)
             
             # Update log values efficiently
